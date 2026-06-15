@@ -69,6 +69,13 @@ void Action_PlayAudio(uint16_t id);
   */
 uint16_t Action_GetStatus(void);
 
+/**
+  * @brief  Advance the task state machine by one tick.
+  * @note   Call from the main loop. Fill in real completion logic here
+  *         (e.g. EXECUTING -> SUCCESS once the motor/pump reports done).
+  */
+void Action_Tick(void);
+
 /* USER CODE BEGIN EFN */
 
 /* USER CODE END EFN */

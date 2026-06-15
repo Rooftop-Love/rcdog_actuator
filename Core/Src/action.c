@@ -17,6 +17,7 @@
 #include "action.h"
 
 /* USER CODE BEGIN Includes */
+#include "stm32f1xx_hal.h"
 /* USER CODE END Includes */
 
 /* USER CODE BEGIN TD */
@@ -86,6 +87,14 @@ void Action_PlayAudio(uint16_t id)
   /* TODO: trigger the audio module to play track id. */
   (void)id;
   current_status = STATUS_OK;
+}
+
+void Action_Tick(void)
+{
+  /* TODO: drive the real task state machine here.
+   * Called from the main loop. Poll sensors/timers and advance
+   * current_status (EXECUTING -> SUCCESS on completion, or
+   * -> FAIL_MOTOR / FAIL_TIMEOUT on fault). */
 }
 
 uint16_t Action_GetStatus(void)

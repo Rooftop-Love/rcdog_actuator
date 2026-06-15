@@ -11,7 +11,7 @@
   *
   * This software is licensed under terms that can be found in the LICENSE file
   * in the root directory of this software component.
-  * If no LICENSE file comes with this software, it is provided AS-IS.
+  * If no LICENSE file comes with this component, it is provided AS-IS.
   *
   ******************************************************************************
   */
@@ -24,6 +24,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "protocol.h"
+#include "action.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -97,7 +98,7 @@ int main(void)
   while (1)
   {
     Protocol_Process();
-    
+    Action_Tick();
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
