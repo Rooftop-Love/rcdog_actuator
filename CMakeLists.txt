@@ -28,11 +28,30 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS TRUE)
 project(${CMAKE_PROJECT_NAME})
 message("Build type: " ${CMAKE_BUILD_TYPE})
 
+get_filename_component(C_COMPILER_NAME "${CMAKE_C_COMPILER}" NAME)
+if(NOT C_COMPILER_NAME MATCHES "^(arm-none-eabi-gcc|starm-clang)(\\.exe)?$")
+    message(FATAL_ERROR
+        "Unsupported compiler '${CMAKE_C_COMPILER}'. "
+        "Configure this STM32 firmware with the Arm embedded toolchain, "
+        "for example: cmake --preset Debug")
+endif()
+
+set(LINKER_SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/STM32F103XX_FLASH.ld")
+if(NOT EXISTS "${LINKER_SCRIPT}")
+    message(FATAL_ERROR "Missing linker script: ${LINKER_SCRIPT}")
+endif()
+
 # Enable CMake support for ASM and C languages
 enable_language(C ASM)
 
 # Create an executable object type
 add_executable(${CMAKE_PROJECT_NAME})
+target_link_options(${CMAKE_PROJECT_NAME} PRIVATE
+    -T "${LINKER_SCRIPT}"
+)
+set_target_properties(${CMAKE_PROJECT_NAME} PROPERTIES
+    LINK_DEPENDS "${LINKER_SCRIPT}"
+)
 
 # Add STM32CubeMX generated sources
 add_subdirectory(cmake/stm32cubemx)

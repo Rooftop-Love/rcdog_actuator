@@ -18,6 +18,7 @@
 
 /* USER CODE BEGIN Includes */
 #include "stm32f1xx_hal.h"
+#include "main.h"
 /* USER CODE END Includes */
 
 /* USER CODE BEGIN TD */
@@ -38,6 +39,26 @@
  * (later) by whatever time base drives the task state machine. */
 static volatile uint16_t current_status;
 
+/* Audio playback state */
+#define AUDIO_PULSE_MS  1000U
+
+static volatile uint8_t  audio_playing_id;   /* 0 = no playback */
+static volatile uint32_t audio_start_tick;
+
+static const struct {
+  GPIO_TypeDef *port;
+  uint16_t      pin;
+} sound_pins[8] = {
+  { Sound_1_GPIO_Port, Sound_1_Pin },
+  { Sound_2_GPIO_Port, Sound_2_Pin },
+  { Sound_3_GPIO_Port, Sound_3_Pin },
+  { Sound_4_GPIO_Port, Sound_4_Pin },
+  { Sound_5_GPIO_Port, Sound_5_Pin },
+  { Sound_6_GPIO_Port, Sound_6_Pin },
+  { Sound_7_GPIO_Port, Sound_7_Pin },
+  { Sound_8_GPIO_Port, Sound_8_Pin },
+};
+
 /* USER CODE END PV */
 
 /* USER CODE BEGIN PFP */
@@ -52,7 +73,7 @@ static volatile uint16_t current_status;
 
 void Action_Init(void)
 {
-  /* TODO: init actuator GPIO / timers here once they are configured. */
+  audio_playing_id = 0;
   current_status = STATUS_IDLE;
 }
 
@@ -84,17 +105,31 @@ void Action_Move(uint16_t x, uint16_t y)
 
 void Action_PlayAudio(uint16_t id)
 {
-  /* TODO: trigger the audio module to play track id. */
-  (void)id;
-  current_status = STATUS_OK;
+  if (id < 1 || id > 8) {
+    current_status = STATUS_FAIL_NO_BLOCK;
+    return;
+  }
+
+  uint8_t idx = (uint8_t)(id - 1);
+  HAL_GPIO_WritePin(sound_pins[idx].port, sound_pins[idx].pin, GPIO_PIN_RESET);
+
+  audio_playing_id = id;
+  audio_start_tick = HAL_GetTick();
+  current_status = STATUS_EXECUTING;
 }
 
 void Action_Tick(void)
 {
-  /* TODO: drive the real task state machine here.
-   * Called from the main loop. Poll sensors/timers and advance
-   * current_status (EXECUTING -> SUCCESS on completion, or
-   * -> FAIL_MOTOR / FAIL_TIMEOUT on fault). */
+  if (audio_playing_id == 0) {
+    return;
+  }
+
+  if ((HAL_GetTick() - audio_start_tick) >= AUDIO_PULSE_MS) {
+    uint8_t idx = (uint8_t)(audio_playing_id - 1);
+    HAL_GPIO_WritePin(sound_pins[idx].port, sound_pins[idx].pin, GPIO_PIN_SET);
+    audio_playing_id = 0;
+    current_status = STATUS_OK;
+  }
 }
 
 uint16_t Action_GetStatus(void)
