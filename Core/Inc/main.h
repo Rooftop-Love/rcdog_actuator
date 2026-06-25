@@ -59,6 +59,26 @@ void Error_Handler(void);
 /* Private defines -----------------------------------------------------------*/
 #define LED_Board_Pin GPIO_PIN_13
 #define LED_Board_GPIO_Port GPIOC
+#define Servo_Pin GPIO_PIN_0
+#define Servo_GPIO_Port GPIOA
+#define Pump_Pin GPIO_PIN_6
+#define Pump_GPIO_Port GPIOA
+#define Sound_8_Pin GPIO_PIN_15
+#define Sound_8_GPIO_Port GPIOA
+#define Sound_7_Pin GPIO_PIN_3
+#define Sound_7_GPIO_Port GPIOB
+#define Sound_6_Pin GPIO_PIN_4
+#define Sound_6_GPIO_Port GPIOB
+#define Sound_5_Pin GPIO_PIN_5
+#define Sound_5_GPIO_Port GPIOB
+#define Sound_4_Pin GPIO_PIN_6
+#define Sound_4_GPIO_Port GPIOB
+#define Sound_3_Pin GPIO_PIN_7
+#define Sound_3_GPIO_Port GPIOB
+#define Sound_2_Pin GPIO_PIN_8
+#define Sound_2_GPIO_Port GPIOB
+#define Sound_1_Pin GPIO_PIN_9
+#define Sound_1_GPIO_Port GPIOB
 
 /* USER CODE BEGIN Private defines */
 

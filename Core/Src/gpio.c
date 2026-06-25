@@ -48,9 +48,20 @@ void MX_GPIO_Init(void)
   __HAL_RCC_GPIOC_CLK_ENABLE();
   __HAL_RCC_GPIOD_CLK_ENABLE();
   __HAL_RCC_GPIOA_CLK_ENABLE();
+  __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(LED_Board_GPIO_Port, LED_Board_Pin, GPIO_PIN_SET);
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(Sound_8_GPIO_Port, Sound_8_Pin, GPIO_PIN_SET);
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOB, Sound_7_Pin|Sound_6_Pin|Sound_4_Pin|Sound_3_Pin
+                          |Sound_2_Pin|Sound_1_Pin, GPIO_PIN_SET);
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(Sound_5_GPIO_Port, Sound_5_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin : LED_Board_Pin */
   GPIO_InitStruct.Pin = LED_Board_Pin;
@@ -58,6 +69,22 @@ void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(LED_Board_GPIO_Port, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : Sound_8_Pin */
+  GPIO_InitStruct.Pin = Sound_8_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_OD;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(Sound_8_GPIO_Port, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : Sound_7_Pin Sound_6_Pin Sound_5_Pin Sound_4_Pin
+                           Sound_3_Pin Sound_2_Pin Sound_1_Pin */
+  GPIO_InitStruct.Pin = Sound_7_Pin|Sound_6_Pin|Sound_5_Pin|Sound_4_Pin
+                          |Sound_3_Pin|Sound_2_Pin|Sound_1_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_OD;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
 }
 
