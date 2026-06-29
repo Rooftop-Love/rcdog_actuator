@@ -19,6 +19,7 @@
 /* USER CODE BEGIN Includes */
 #include "stm32f1xx_hal.h"
 #include "main.h"
+#include "tim.h"
 /* USER CODE END Includes */
 
 /* USER CODE BEGIN TD */
@@ -26,6 +27,15 @@
 /* USER CODE END TD */
 
 /* USER CODE BEGIN PD */
+
+/* Servo pulse width in TIM2 ticks (1 tick = 1μs with PSC=71). */
+#define SERVO_CCR_0DEG    500U    /*  0° →  500μs */
+#define SERVO_CCR_90DEG   1500U   /* 90° → 1500μs */
+#define SERVO_CCR_180DEG  2500U   /* 180° → 2500μs */
+
+/* Pump PWM: TIM3 CH1, PSC=71, Period=99 (10kHz). */
+#define PUMP_CCR_MAX  99U   /* full speed */
+#define PUMP_CCR_OFF   0U   /* stopped */
 
 /* USER CODE END PD */
 
@@ -59,6 +69,26 @@ static const struct {
   { Sound_8_GPIO_Port, Sound_8_Pin },
 };
 
+/* Action state machine for suck/release sequences */
+typedef enum {
+  ACTION_NONE = 0,
+  ACTION_SUCK_SERVO_180,
+  ACTION_SUCK_PUMP_ON,
+  ACTION_SUCK_WAIT_5S,
+  ACTION_SUCK_SERVO_0,
+  ACTION_SUCK_WAIT_3S,
+  ACTION_RELEASE_SERVO_180,
+  ACTION_RELEASE_WAIT_500MS,
+} ActionState_t;
+
+static volatile ActionState_t action_state;
+static volatile uint32_t      action_tick_start;
+
+/* Timing constants */
+#define SUCK_WAIT_5S_MS    5000U
+#define SUCK_WAIT_3S_MS    3000U
+#define RELEASE_WAIT_500MS 500U
+
 /* USER CODE END PV */
 
 /* USER CODE BEGIN PFP */
@@ -74,30 +104,49 @@ static const struct {
 void Action_Init(void)
 {
   audio_playing_id = 0;
+  action_state = ACTION_NONE;
   current_status = STATUS_IDLE;
+
+  /* Start servo PWM and default to 180°. */
+  HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1);
+  __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, SERVO_CCR_180DEG);
+
+  /* Start pump PWM, default off. */
+  HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_1);
+  __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, PUMP_CCR_OFF);
 }
 
 void Action_Suck(void)
 {
-  /* TODO: drive the vacuum pump on. */
+  /* Start suck sequence: servo 180° → pump on → 5s → servo 90° → 3s → done */
+  __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, SERVO_CCR_180DEG);
+  action_state = ACTION_SUCK_SERVO_180;
+  action_tick_start = HAL_GetTick();
   current_status = STATUS_EXECUTING;
 }
 
 void Action_Release(void)
 {
-  /* TODO: drive the vacuum pump off / valve open. */
+  /* Start release sequence: servo 180° → 0.5s → pump off → done */
+  __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, SERVO_CCR_180DEG);
+  action_state = ACTION_RELEASE_SERVO_180;
+  action_tick_start = HAL_GetTick();
   current_status = STATUS_EXECUTING;
 }
 
 void Action_Cancel(void)
 {
-  /* TODO: abort the running task immediately. */
   /* Stop audio if playing */
   if (audio_playing_id >= 1 && audio_playing_id <= 8) {
     uint8_t idx = (uint8_t)(audio_playing_id - 1);
     HAL_GPIO_WritePin(sound_pins[idx].port, sound_pins[idx].pin, GPIO_PIN_SET);
     audio_playing_id = 0;
   }
+
+  /* Stop pump and reset servo */
+  __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, PUMP_CCR_OFF);
+  __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, SERVO_CCR_0DEG);
+  action_state = ACTION_NONE;
   current_status = STATUS_IDLE;
 }
 
@@ -136,15 +185,67 @@ void Action_PlayAudio(uint16_t id)
 
 void Action_Tick(void)
 {
-  if (audio_playing_id == 0) {
-    return;
+  /* Audio completion check */
+  if (audio_playing_id != 0) {
+    if ((HAL_GetTick() - audio_start_tick) >= AUDIO_PULSE_MS) {
+      uint8_t idx = (uint8_t)(audio_playing_id - 1);
+      HAL_GPIO_WritePin(sound_pins[idx].port, sound_pins[idx].pin, GPIO_PIN_SET);
+      audio_playing_id = 0;
+      /* Don't override action status if action is running */
+      if (action_state == ACTION_NONE) {
+        current_status = STATUS_OK;
+      }
+    }
   }
 
-  if ((HAL_GetTick() - audio_start_tick) >= AUDIO_PULSE_MS) {
-    uint8_t idx = (uint8_t)(audio_playing_id - 1);
-    HAL_GPIO_WritePin(sound_pins[idx].port, sound_pins[idx].pin, GPIO_PIN_SET);
-    audio_playing_id = 0;
-    current_status = STATUS_OK;
+  /* Action state machine */
+  switch (action_state) {
+    case ACTION_NONE:
+      break;
+
+    case ACTION_SUCK_SERVO_180:
+      /* Servo already set to 180° in Action_Suck(), now start pump */
+      __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, PUMP_CCR_MAX);
+      action_state = ACTION_SUCK_PUMP_ON;
+      break;
+
+    case ACTION_SUCK_PUMP_ON:
+      action_tick_start = HAL_GetTick();
+      action_state = ACTION_SUCK_WAIT_5S;
+      break;
+
+    case ACTION_SUCK_WAIT_5S:
+      if ((HAL_GetTick() - action_tick_start) >= SUCK_WAIT_5S_MS) {
+        __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, SERVO_CCR_0DEG);
+        action_state = ACTION_SUCK_SERVO_0;
+      }
+      break;
+
+    case ACTION_SUCK_SERVO_0:
+      action_tick_start = HAL_GetTick();
+      action_state = ACTION_SUCK_WAIT_3S;
+      break;
+
+    case ACTION_SUCK_WAIT_3S:
+      if ((HAL_GetTick() - action_tick_start) >= SUCK_WAIT_3S_MS) {
+        action_state = ACTION_NONE;
+        current_status = STATUS_OK;
+      }
+      break;
+
+    case ACTION_RELEASE_SERVO_180:
+      /* Servo already set to 180° in Action_Release(), start wait */
+      action_tick_start = HAL_GetTick();
+      action_state = ACTION_RELEASE_WAIT_500MS;
+      break;
+
+    case ACTION_RELEASE_WAIT_500MS:
+      if ((HAL_GetTick() - action_tick_start) >= RELEASE_WAIT_500MS) {
+        __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, PUMP_CCR_OFF);
+        action_state = ACTION_NONE;
+        current_status = STATUS_OK;
+      }
+      break;
   }
 }
 
