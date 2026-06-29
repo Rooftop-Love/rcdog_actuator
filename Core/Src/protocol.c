@@ -2,12 +2,16 @@
 /**
   ******************************************************************************
   * @file    protocol.c
-  * @brief   USART2 command/response protocol implementation.
+  * @brief   USART1/USART2 command/response protocol implementation.
   *
   *          Receive path: 1 byte per interrupt -> frame-header search state
   *          machine -> on a complete CRC-valid frame, set frame_ready.
   *          The main loop calls Protocol_Process() which de-duplicates on
   *          cmd_id, dispatches the command and sends the 8-byte response.
+  *
+  *          Both USART1 (debug) and USART2 (command) share the same protocol
+  *          state machine and action layer; responses are sent back on the
+  *          same port that received the request.
   *
   *          All heavy work (CRC verify of the full frame, dispatch, response
   *          transmit) runs in the main loop; the ISR only feeds bytes and
@@ -94,18 +98,34 @@ static uint8_t rx_byte;
 
 /* Flag + payload handed from ISR to main loop. */
 static volatile uint8_t  frame_ready;
-static Proto_Request_t   rx_frame;
 
 /* ---- Last cmd_id seen, for de-duplication. ------------------------------ */
 static uint16_t last_cmd_id;
+
+/* ---- USART1 debug-port receive state. ----------------------------------- */
+static volatile RxState_t rx_state_u1;
+static volatile uint8_t   rx_buf_u1[PROTO_REQUEST_LEN];
+static volatile uint8_t   rx_body_idx_u1;
+static uint8_t            rx_byte_u1;
+static volatile uint8_t   frame_ready_u1;
+static uint16_t           last_cmd_id_u1;
 
 /* USER CODE END PV */
 
 /* USER CODE BEGIN PFP */
 
 static uint16_t crc16_modbus(const uint8_t *data, uint32_t len);
-static void    send_response(uint16_t cmd_id, uint16_t status);
-static void    dispatch(const Proto_Request_t *req);
+static void    send_response(UART_HandleTypeDef *huart, uint16_t cmd_id, uint16_t status);
+static void    dispatch(UART_HandleTypeDef *huart, const Proto_Request_t *req);
+static void    Protocol_OnRxByte(uint8_t byte,
+                                  volatile RxState_t *state,
+                                  volatile uint8_t *buf,
+                                  volatile uint8_t *body_idx,
+                                  volatile uint8_t *ready);
+static void    process_frame(UART_HandleTypeDef *huart,
+                              volatile uint8_t *buf,
+                              volatile uint8_t *frame_ready,
+                              uint16_t *last_cmd_id);
 
 /* USER CODE END PFP */
 
@@ -137,9 +157,9 @@ static uint16_t crc16_modbus(const uint8_t *data, uint32_t len)
 
 /**
   * @brief  Assemble and send the 8-byte response (little-endian, CRC over
-  *         the first 6 bytes). Blocks until the bytes leave USART2.
+  *         the first 6 bytes). Blocks until the bytes leave the UART.
   */
-static void send_response(uint16_t cmd_id, uint16_t status)
+static void send_response(UART_HandleTypeDef *huart, uint16_t cmd_id, uint16_t status)
 {
   uint8_t  buf[PROTO_RESPONSE_LEN];
   uint16_t crc;
@@ -155,7 +175,7 @@ static void send_response(uint16_t cmd_id, uint16_t status)
   buf[6] = (uint8_t)(crc & 0xFF);
   buf[7] = (uint8_t)((crc >> 8) & 0xFF);
 
-  (void)HAL_UART_Transmit(&huart2, buf, PROTO_RESPONSE_LEN, 50U);
+  (void)HAL_UART_Transmit(huart, buf, PROTO_RESPONSE_LEN, 50U);
 }
 
 /* ---- Command dispatch. ------------------------------------------------- */
@@ -163,42 +183,42 @@ static void send_response(uint16_t cmd_id, uint16_t status)
 /**
   * @brief  Execute one de-duplicated request and reply with a status.
   */
-static void dispatch(const Proto_Request_t *req)
+static void dispatch(UART_HandleTypeDef *huart, const Proto_Request_t *req)
 {
   switch (req->cmd)
   {
     case CMD_SUCK:
       Action_Suck();
-      send_response(req->cmd_id, STATUS_EXECUTING);
+      send_response(huart, req->cmd_id, STATUS_EXECUTING);
       break;
 
     case CMD_RELEASE:
       Action_Release();
-      send_response(req->cmd_id, STATUS_EXECUTING);
+      send_response(huart, req->cmd_id, STATUS_EXECUTING);
       break;
 
     case CMD_CANCEL:
       Action_Cancel();
-      send_response(req->cmd_id, STATUS_IDLE);
+      send_response(huart, req->cmd_id, STATUS_IDLE);
       break;
 
     case CMD_MOVE:
       Action_Move(req->param1, req->param2);
-      send_response(req->cmd_id, STATUS_EXECUTING);
+      send_response(huart, req->cmd_id, STATUS_EXECUTING);
       break;
 
     case CMD_QUERY:
       /* Reply with current status even while busy. */
-      send_response(req->cmd_id, Action_GetStatus());
+      send_response(huart, req->cmd_id, Action_GetStatus());
       break;
 
     case CMD_PLAY_AUDIO:
       Action_PlayAudio(req->param1);
-      send_response(req->cmd_id, STATUS_OK);
+      send_response(huart, req->cmd_id, STATUS_OK);
       break;
 
     default:
-      send_response(req->cmd_id, STATUS_FAIL_NO_BLOCK);
+      send_response(huart, req->cmd_id, STATUS_FAIL_NO_BLOCK);
       break;
   }
 }
@@ -216,76 +236,94 @@ void Protocol_Init(void)
 
   (void)memset((void *)rx_buf, 0, sizeof(rx_buf));
 
-  /* Kick off the first interrupt-driven receive. */
+  rx_state_u1     = RX_WAIT_HEAD0;
+  rx_body_idx_u1  = 0;
+  frame_ready_u1  = 0;
+  last_cmd_id_u1  = 0;
+
+  (void)memset((void *)rx_buf_u1, 0, sizeof(rx_buf_u1));
+
+  /* Kick off interrupt-driven receive on both ports. */
   (void)HAL_UART_Receive_IT(&huart2, &rx_byte, 1U);
+  (void)HAL_UART_Receive_IT(&huart1, &rx_byte_u1, 1U);
 }
 
-void Protocol_OnRxByte(uint8_t byte)
+/**
+  * @brief  Byte-level receive state machine (shared by USART1 and USART2).
+  */
+static void Protocol_OnRxByte(uint8_t byte,
+                               volatile RxState_t *state,
+                               volatile uint8_t *buf,
+                               volatile uint8_t *body_idx,
+                               volatile uint8_t *ready)
 {
-  switch (rx_state)
+  switch (*state)
   {
     case RX_WAIT_HEAD0:
       if (byte == PROTO_HEAD0)
       {
-        rx_buf[0] = byte;
-        rx_state = RX_WAIT_HEAD1;
+        buf[0] = byte;
+        *state = RX_WAIT_HEAD1;
       }
       break;
 
     case RX_WAIT_HEAD1:
       if (byte == PROTO_HEAD1)
       {
-        rx_buf[1] = byte;
-        rx_body_idx = 0;
-        rx_state = RX_GATHER_BODY;
+        buf[1] = byte;
+        *body_idx = 0;
+        *state = RX_GATHER_BODY;
       }
       else if (byte == PROTO_HEAD0)
       {
         /* A second 0xA5 re-arms the header search. */
-        rx_buf[0] = byte;
+        buf[0] = byte;
         /* stay in RX_WAIT_HEAD1 */
       }
       else
       {
-        rx_state = RX_WAIT_HEAD0;
+        *state = RX_WAIT_HEAD0;
       }
       break;
 
     case RX_GATHER_BODY:
-      /* rx_buf[0..1] = header, rx_buf[2..11] = body. */
-      rx_buf[2U + rx_body_idx] = byte;
-      rx_body_idx++;
+      /* buf[0..1] = header, buf[2..11] = body. */
+      buf[2U + *body_idx] = byte;
+      (*body_idx)++;
 
-      if (rx_body_idx >= (PROTO_REQUEST_LEN - 2U))
+      if (*body_idx >= (PROTO_REQUEST_LEN - 2U))
       {
         /* Whole frame collected; hand it to the main loop for CRC + work. */
-        frame_ready = 1U;
-        rx_state = RX_WAIT_HEAD0;
+        *ready = 1U;
+        *state = RX_WAIT_HEAD0;
       }
       break;
 
     default:
-      rx_state = RX_WAIT_HEAD0;
+      *state = RX_WAIT_HEAD0;
       break;
   }
 }
 
-void Protocol_Process(void)
+/**
+  * @brief  Process one complete frame: CRC check, decode, de-duplicate, dispatch.
+  *         Shared by both USART1 and USART2 paths.
+  */
+static void process_frame(UART_HandleTypeDef *huart,
+                           volatile uint8_t *buf,
+                           volatile uint8_t *frame_ready,
+                           uint16_t *last_cmd_id)
 {
   uint16_t recv_crc;
   uint16_t calc_crc;
   const uint8_t *body;
   Proto_Request_t req;
 
-  if (!frame_ready)
-  {
-    return;
-  }
-  frame_ready = 0;
+  *frame_ready = 0;
 
   /* CRC covers bytes 0..9 of the frame. */
-  calc_crc = crc16_modbus((const uint8_t *)rx_buf, PROTO_REQUEST_CRC_LEN);
-  recv_crc = (uint16_t)rx_buf[10] | ((uint16_t)rx_buf[11] << 8);
+  calc_crc = crc16_modbus((const uint8_t *)buf, PROTO_REQUEST_CRC_LEN);
+  recv_crc = (uint16_t)buf[10] | ((uint16_t)buf[11] << 8);
   if (calc_crc != recv_crc)
   {
     /* Corrupt frame: drop silently, host will retransmit. */
@@ -293,36 +331,51 @@ void Protocol_Process(void)
   }
 
   /* Decode fields little-endian (no struct-packing assumptions). */
-  body       = (const uint8_t *)rx_buf;  /* index from here for clarity */
+  body       = (const uint8_t *)buf;
   req.cmd_id = (uint16_t)body[2] | ((uint16_t)body[3] << 8);
   req.cmd    = (uint16_t)body[4] | ((uint16_t)body[5] << 8);
   req.param1 = (uint16_t)body[6] | ((uint16_t)body[7] << 8);
   req.param2 = (uint16_t)body[8] | ((uint16_t)body[9] << 8);
 
   /* De-duplicate: a repeated cmd_id only re-reports the current status. */
-  if (req.cmd_id == last_cmd_id)
+  if (req.cmd_id == *last_cmd_id)
   {
-    send_response(req.cmd_id, Action_GetStatus());
+    send_response(huart, req.cmd_id, Action_GetStatus());
     return;
   }
-  last_cmd_id = req.cmd_id;
+  *last_cmd_id = req.cmd_id;
 
   /* New command: execute and reply. */
-  rx_frame = req;
-  dispatch(&rx_frame);
+  dispatch(huart, &req);
+}
+
+void Protocol_Process(void)
+{
+  if (frame_ready)
+  {
+    process_frame(&huart2, rx_buf, &frame_ready, &last_cmd_id);
+  }
+  if (frame_ready_u1)
+  {
+    process_frame(&huart1, rx_buf_u1, &frame_ready_u1, &last_cmd_id_u1);
+  }
 }
 
 /**
   * @brief  HAL per-byte RX complete callback.
-  * @note   Overrides the weak default in stm32f1xx_hal_uart.c. Must run for
-  *         every byte received on huart2.
+  * @note   Overrides the weak default in stm32f1xx_hal_uart.c.
   */
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
   if (huart->Instance == USART2)
   {
-    Protocol_OnRxByte(rx_byte);
+    Protocol_OnRxByte(rx_byte, &rx_state, rx_buf, &rx_body_idx, &frame_ready);
     (void)HAL_UART_Receive_IT(&huart2, &rx_byte, 1U);
+  }
+  else if (huart->Instance == USART1)
+  {
+    Protocol_OnRxByte(rx_byte_u1, &rx_state_u1, rx_buf_u1, &rx_body_idx_u1, &frame_ready_u1);
+    (void)HAL_UART_Receive_IT(&huart1, &rx_byte_u1, 1U);
   }
 }
 

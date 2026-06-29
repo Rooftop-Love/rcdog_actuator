@@ -76,16 +76,11 @@ typedef struct
 /* Exported functions ------------------------------------------------------- */
 
 /**
-  * @brief  Initialise the protocol module and start the first RX.
-  * @note   Must be called once after MX_USART2_UART_Init().
+  * @brief  Initialise the protocol module and start the first RX on both
+  *         USART1 (debug) and USART2 (command).
+  * @note   Must be called once after MX_USART1_UART_Init() and MX_USART2_UART_Init().
   */
 void Protocol_Init(void);
-
-/**
-  * @brief  Feed one received byte into the frame-header search state machine.
-  * @note   Intended to be called from HAL_UART_RxCpltCallback only.
-  */
-void Protocol_OnRxByte(uint8_t byte);
 
 /**
   * @brief  Process a fully-received frame: de-duplicate, dispatch, respond.

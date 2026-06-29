@@ -92,6 +92,12 @@ void Action_Release(void)
 void Action_Cancel(void)
 {
   /* TODO: abort the running task immediately. */
+  /* Stop audio if playing */
+  if (audio_playing_id >= 1 && audio_playing_id <= 8) {
+    uint8_t idx = (uint8_t)(audio_playing_id - 1);
+    HAL_GPIO_WritePin(sound_pins[idx].port, sound_pins[idx].pin, GPIO_PIN_SET);
+    audio_playing_id = 0;
+  }
   current_status = STATUS_IDLE;
 }
 
@@ -111,6 +117,16 @@ void Action_PlayAudio(uint16_t id)
   }
 
   uint8_t idx = (uint8_t)(id - 1);
+
+  /* Stop currently playing audio before starting new one */
+  if (audio_playing_id >= 1 && audio_playing_id <= 8) {
+    uint8_t old_idx = (uint8_t)(audio_playing_id - 1);
+    HAL_GPIO_WritePin(sound_pins[old_idx].port, sound_pins[old_idx].pin, GPIO_PIN_SET);
+    if (old_idx == idx) {
+      HAL_Delay(20);
+    }
+  }
+
   HAL_GPIO_WritePin(sound_pins[idx].port, sound_pins[idx].pin, GPIO_PIN_RESET);
 
   audio_playing_id = id;
