@@ -204,7 +204,7 @@ static void dispatch(UART_HandleTypeDef *huart, const Proto_Request_t *req)
 
     case CMD_MOVE:
       Action_Move(req->param1, req->param2);
-      send_response(huart, req->cmd_id, STATUS_EXECUTING);
+      send_response(huart, req->cmd_id, STATUS_OK);
       break;
 
     case CMD_QUERY:
@@ -213,8 +213,7 @@ static void dispatch(UART_HandleTypeDef *huart, const Proto_Request_t *req)
       break;
 
     case CMD_PLAY_AUDIO:
-      Action_PlayAudio(req->param1);
-      send_response(huart, req->cmd_id, STATUS_OK);
+      send_response(huart, req->cmd_id, Action_PlayAudio(req->param1));
       break;
 
     default:

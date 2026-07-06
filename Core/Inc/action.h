@@ -60,8 +60,9 @@ void Action_Move(uint16_t x, uint16_t y);
 /**
   * @brief  Trigger playback of an audio track.
   * @param  id audio track id
+  * @retval STATUS_OK. Invalid ids are ignored.
   */
-void Action_PlayAudio(uint16_t id);
+uint16_t Action_PlayAudio(uint16_t id);
 
 /**
   * @brief  Read the current task status.
