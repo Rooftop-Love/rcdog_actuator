@@ -31,7 +31,7 @@
 
 /**
   * @brief  Initialise the action layer (reset task state).
-  * @note   Called by Protocol_Init(); will also drive future hardware init.
+  * @note   Called by Protocol_Init(); starts PWM outputs and resets task state.
   */
 void Action_Init(void);
 
@@ -72,8 +72,8 @@ uint16_t Action_GetStatus(void);
 
 /**
   * @brief  Advance the task state machine by one tick.
-  * @note   Call from the main loop. Fill in real completion logic here
-  *         (e.g. EXECUTING -> SUCCESS once the motor/pump reports done).
+  * @note   Call from the main loop to update non-blocking action and audio
+  *         timing.
   */
 void Action_Tick(void);
 

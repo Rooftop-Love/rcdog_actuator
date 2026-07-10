@@ -5,10 +5,8 @@
   * @brief   Actuator action layer implementation.
   *
   *          Owns the task state (current_status) and the physical outputs.
-  *          For now every action is a stub that only sets current_status, so
-  *          the protocol layer can be exercised end to end. Wire the real
-  *          hardware (GPIO / timers / motor driver / audio) inside the
-  *          Action_* bodies and add the status progression here.
+  *          Drives the configured GPIO/PWM outputs and advances the non-blocking
+  *          suck/release/audio sequences from Action_Tick().
   ******************************************************************************
   */
 /* USER CODE END Header */
@@ -28,10 +26,10 @@
 
 /* USER CODE BEGIN PD */
 
-/* Servo pulse width in TIM2 ticks (1 tick = 1μs with PSC=71). */
-#define SERVO_CCR_0DEG    500U    /*  0° →  500μs */
-#define SERVO_CCR_90DEG   1500U   /* 90° → 1500μs */
-#define SERVO_CCR_180DEG  2500U   /* 180° → 2500μs */
+/* Servo pulse width in TIM2 ticks (1 tick = 1 us with PSC=71). */
+#define SERVO_CCR_0DEG    500U    /*   0 deg ->  500 us */
+#define SERVO_CCR_90DEG   1500U   /*  90 deg -> 1500 us */
+#define SERVO_CCR_180DEG  2500U   /* 180 deg -> 2500 us */
 
 /* Pump PWM: TIM3 CH1, PSC=71, Period=99 (10kHz). */
 #define PUMP_CCR_MAX  99U   /* full speed */
@@ -79,6 +77,7 @@ typedef enum {
   ACTION_SUCK_WAIT_3S,
   ACTION_RELEASE_SERVO_180,
   ACTION_RELEASE_WAIT_500MS,
+  ACTION_RELEASE_WAIT_3S,
 } ActionState_t;
 
 static volatile ActionState_t action_state;
@@ -88,6 +87,7 @@ static volatile uint32_t      action_tick_start;
 #define SUCK_WAIT_5S_MS    5000U
 #define SUCK_WAIT_3S_MS    3000U
 #define RELEASE_WAIT_500MS 500U
+#define RELEASE_WAIT_3S   3000U
 
 /* USER CODE END PV */
 
@@ -107,7 +107,7 @@ void Action_Init(void)
   action_state = ACTION_NONE;
   current_status = STATUS_IDLE;
 
-  /* Start servo PWM and default to 0°. */
+  /* Start servo PWM and default to 0 deg. */
   HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1);
   __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, SERVO_CCR_0DEG);
 
@@ -118,7 +118,7 @@ void Action_Init(void)
 
 void Action_Suck(void)
 {
-  /* Start suck sequence: servo 180° → pump on → 5s → servo 90° → 3s → done */
+  /* Start suck sequence: servo 180 deg -> pump on -> 5s -> servo 0 deg -> 3s -> done. */
   __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, SERVO_CCR_180DEG);
   action_state = ACTION_SUCK_SERVO_180;
   action_tick_start = HAL_GetTick();
@@ -127,7 +127,7 @@ void Action_Suck(void)
 
 void Action_Release(void)
 {
-  /* Start release sequence: servo 180° → 0.5s → pump off → done */
+  /* Start release sequence: servo 180 deg -> 0.5s -> pump off -> done. */
   __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, SERVO_CCR_180DEG);
   action_state = ACTION_RELEASE_SERVO_180;
   action_tick_start = HAL_GetTick();
@@ -143,9 +143,6 @@ void Action_Cancel(void)
     audio_playing_id = 0;
   }
 
-  /* Stop pump and reset servo */
-  __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, PUMP_CCR_OFF);
-  __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, SERVO_CCR_0DEG);
   action_state = ACTION_NONE;
   current_status = STATUS_IDLE;
 }
@@ -199,7 +196,7 @@ void Action_Tick(void)
       break;
 
     case ACTION_SUCK_SERVO_180:
-      /* Servo already set to 180° in Action_Suck(), now start pump */
+      /* Servo already set to 180 deg in Action_Suck(), now start pump. */
       __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, PUMP_CCR_MAX);
       action_state = ACTION_SUCK_PUMP_ON;
       break;
@@ -229,7 +226,7 @@ void Action_Tick(void)
       break;
 
     case ACTION_RELEASE_SERVO_180:
-      /* Servo already set to 180° in Action_Release(), start wait */
+      /* Servo already set to 180 deg in Action_Release(), start wait. */
       action_tick_start = HAL_GetTick();
       action_state = ACTION_RELEASE_WAIT_500MS;
       break;
@@ -237,6 +234,14 @@ void Action_Tick(void)
     case ACTION_RELEASE_WAIT_500MS:
       if ((HAL_GetTick() - action_tick_start) >= RELEASE_WAIT_500MS) {
         __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, PUMP_CCR_OFF);
+        action_tick_start = HAL_GetTick();
+        action_state = ACTION_RELEASE_WAIT_3S;
+      }
+      break;
+
+    case ACTION_RELEASE_WAIT_3S:
+      if ((HAL_GetTick() - action_tick_start) >= RELEASE_WAIT_3S) {
+        __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, SERVO_CCR_0DEG);
         action_state = ACTION_NONE;
         current_status = STATUS_OK;
       }

@@ -51,7 +51,7 @@ typedef enum
 /* USER CODE BEGIN PV */
 
 /* ---- CRC-16/MODBUS lookup table (poly 0xA001, reflet). ------------------ */
-/* Generated from the reference bit-shift loop in MCU_PROTOCOL.md.           */
+/* Generated from the CRC-16/MODBUS reference bit-shift loop.                */
 static const uint16_t crc16_table[256] = {
   0x0000, 0xC0C1, 0xC181, 0x0140, 0xC301, 0x03C0, 0x0280, 0xC241,
   0xC601, 0x06C0, 0x0780, 0xC741, 0x0500, 0xC5C1, 0xC481, 0x0440,
@@ -98,6 +98,7 @@ static uint8_t rx_byte;
 
 /* Flag + payload handed from ISR to main loop. */
 static volatile uint8_t  frame_ready;
+static volatile uint8_t  rx_rearm_pending;
 
 /* ---- Last cmd_id seen, for de-duplication. ------------------------------ */
 static uint16_t last_cmd_id;
@@ -108,6 +109,7 @@ static volatile uint8_t   rx_buf_u1[PROTO_REQUEST_LEN];
 static volatile uint8_t   rx_body_idx_u1;
 static uint8_t            rx_byte_u1;
 static volatile uint8_t   frame_ready_u1;
+static volatile uint8_t   rx_rearm_pending_u1;
 static uint16_t           last_cmd_id_u1;
 
 /* USER CODE END PV */
@@ -122,6 +124,12 @@ static void    Protocol_OnRxByte(uint8_t byte,
                                   volatile uint8_t *buf,
                                   volatile uint8_t *body_idx,
                                   volatile uint8_t *ready);
+static void    reset_rx_path(volatile RxState_t *state,
+                              volatile uint8_t *body_idx,
+                              volatile uint8_t *ready);
+static void    rearm_rx(UART_HandleTypeDef *huart,
+                         uint8_t *rx_data,
+                         volatile uint8_t *rearm_pending);
 static void    process_frame(UART_HandleTypeDef *huart,
                               volatile uint8_t *buf,
                               volatile uint8_t *frame_ready,
@@ -147,6 +155,37 @@ static uint16_t crc16_modbus(const uint8_t *data, uint32_t len)
     crc = (uint16_t)((crc >> 8) ^ crc16_table[(uint8_t)(crc ^ data[i])]);
   }
   return crc;
+}
+
+static void reset_rx_path(volatile RxState_t *state,
+                          volatile uint8_t *body_idx,
+                          volatile uint8_t *ready)
+{
+  *state = RX_WAIT_HEAD0;
+  *body_idx = 0U;
+  *ready = 0U;
+}
+
+static void rearm_rx(UART_HandleTypeDef *huart,
+                     uint8_t *rx_data,
+                     volatile uint8_t *rearm_pending)
+{
+  if (huart->RxState != HAL_UART_STATE_READY)
+  {
+    /* A receive is already active. */
+    *rearm_pending = 0U;
+    return;
+  }
+
+  if (HAL_UART_Receive_IT(huart, rx_data, 1U) == HAL_OK)
+  {
+    *rearm_pending = 0U;
+  }
+  else
+  {
+    /* Protocol_Process() will retry outside interrupt context. */
+    *rearm_pending = 1U;
+  }
 }
 
 /* USER CODE END 0 */
@@ -231,6 +270,7 @@ void Protocol_Init(void)
   rx_state     = RX_WAIT_HEAD0;
   rx_body_idx  = 0;
   frame_ready  = 0;
+  rx_rearm_pending = 1U;
   last_cmd_id  = 0;
 
   (void)memset((void *)rx_buf, 0, sizeof(rx_buf));
@@ -238,13 +278,14 @@ void Protocol_Init(void)
   rx_state_u1     = RX_WAIT_HEAD0;
   rx_body_idx_u1  = 0;
   frame_ready_u1  = 0;
+  rx_rearm_pending_u1 = 1U;
   last_cmd_id_u1  = 0;
 
   (void)memset((void *)rx_buf_u1, 0, sizeof(rx_buf_u1));
 
   /* Kick off interrupt-driven receive on both ports. */
-  (void)HAL_UART_Receive_IT(&huart2, &rx_byte, 1U);
-  (void)HAL_UART_Receive_IT(&huart1, &rx_byte_u1, 1U);
+  rearm_rx(&huart2, &rx_byte, &rx_rearm_pending);
+  rearm_rx(&huart1, &rx_byte_u1, &rx_rearm_pending_u1);
 }
 
 /**
@@ -350,6 +391,15 @@ static void process_frame(UART_HandleTypeDef *huart,
 
 void Protocol_Process(void)
 {
+  if (rx_rearm_pending)
+  {
+    rearm_rx(&huart2, &rx_byte, &rx_rearm_pending);
+  }
+  if (rx_rearm_pending_u1)
+  {
+    rearm_rx(&huart1, &rx_byte_u1, &rx_rearm_pending_u1);
+  }
+
   if (frame_ready)
   {
     process_frame(&huart2, rx_buf, &frame_ready, &last_cmd_id);
@@ -369,12 +419,35 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
   if (huart->Instance == USART2)
   {
     Protocol_OnRxByte(rx_byte, &rx_state, rx_buf, &rx_body_idx, &frame_ready);
-    (void)HAL_UART_Receive_IT(&huart2, &rx_byte, 1U);
+    rx_rearm_pending = 1U;
+    rearm_rx(&huart2, &rx_byte, &rx_rearm_pending);
   }
   else if (huart->Instance == USART1)
   {
     Protocol_OnRxByte(rx_byte_u1, &rx_state_u1, rx_buf_u1, &rx_body_idx_u1, &frame_ready_u1);
-    (void)HAL_UART_Receive_IT(&huart1, &rx_byte_u1, 1U);
+    rx_rearm_pending_u1 = 1U;
+    rearm_rx(&huart1, &rx_byte_u1, &rx_rearm_pending_u1);
+  }
+}
+
+/**
+  * @brief  Recover interrupt-driven reception after UART line/overrun errors.
+  * @note   The current partial frame is discarded, but command de-duplication
+  *         state and all actuator outputs are left unchanged.
+  */
+void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
+{
+  if (huart->Instance == USART2)
+  {
+    reset_rx_path(&rx_state, &rx_body_idx, &frame_ready);
+    rx_rearm_pending = 1U;
+    rearm_rx(&huart2, &rx_byte, &rx_rearm_pending);
+  }
+  else if (huart->Instance == USART1)
+  {
+    reset_rx_path(&rx_state_u1, &rx_body_idx_u1, &frame_ready_u1);
+    rx_rearm_pending_u1 = 1U;
+    rearm_rx(&huart1, &rx_byte_u1, &rx_rearm_pending_u1);
   }
 }
 

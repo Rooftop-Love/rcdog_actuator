@@ -2,7 +2,7 @@
 /**
   ******************************************************************************
   * @file    protocol.h
-  * @brief   USART2 command/response protocol (see MCU_PROTOCOL.md).
+  * @brief   USART1/USART2 command/response protocol.
   *
   *          Frame layout (little-endian):
   *            Request  (12B): head[2]=0xA5,0x00 | cmd_id[2] | cmd[2]
