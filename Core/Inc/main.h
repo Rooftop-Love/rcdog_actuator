@@ -63,6 +63,8 @@ void Error_Handler(void);
 #define Servo_GPIO_Port GPIOA
 #define Pump_Pin GPIO_PIN_6
 #define Pump_GPIO_Port GPIOA
+#define Relay_Pin GPIO_PIN_12
+#define Relay_GPIO_Port GPIOB
 #define Sound_8_Pin GPIO_PIN_15
 #define Sound_8_GPIO_Port GPIOA
 #define Sound_7_Pin GPIO_PIN_3
