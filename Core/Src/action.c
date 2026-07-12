@@ -151,6 +151,7 @@ void Action_Move(uint16_t x, uint16_t y)
 {
   (void)x;
   (void)y;
+  __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, SERVO_CCR_180DEG);
   current_status = STATUS_OK;
 }
 
