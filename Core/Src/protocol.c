@@ -227,7 +227,7 @@ static void dispatch(UART_HandleTypeDef *huart, const Proto_Request_t *req)
   switch (req->cmd)
   {
     case CMD_SUCK:
-      Action_Suck();
+      Action_Suck(req->param1);
       send_response(huart, req->cmd_id, STATUS_EXECUTING);
       break;
 
