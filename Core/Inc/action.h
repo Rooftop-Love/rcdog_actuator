@@ -38,7 +38,7 @@ void Action_Init(void);
 /**
   * @brief  Start a suck (vacuum on) task.
   */
-void Action_Suck(uint16_t param1);
+void Action_Suck(void);
 
 /**
   * @brief  Start a release (vacuum off / valve open) task.

@@ -73,8 +73,6 @@ typedef enum {
   ACTION_SUCK_SERVO_180,
   ACTION_SUCK_PUMP_ON,
   ACTION_SUCK_WAIT_5S,
-  ACTION_SUCK_SERVO_0,
-  ACTION_SUCK_WAIT_3S,
     ACTION_RELEASE_SERVO_180,
     ACTION_RELEASE_WAIT_3S,
     ACTION_RELEASE_WAIT_1S,
@@ -85,7 +83,6 @@ static volatile uint32_t      action_tick_start;
 
 /* Timing constants */
 #define SUCK_WAIT_5S_MS    1000U
-#define SUCK_WAIT_3S_MS    1000U
 #define RELEASE_WAIT_3S   1500U
 #define RELEASE_WAIT_1S   500U
 
@@ -116,16 +113,8 @@ void Action_Init(void)
   __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, PUMP_CCR_OFF);
 }
 
-void Action_Suck(uint16_t param1)
+void Action_Suck(void)
 {
-  if (param1 == 1U) {
-    __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, SERVO_CCR_0DEG);
-    action_state = ACTION_SUCK_SERVO_0;
-    action_tick_start = HAL_GetTick();
-    current_status = STATUS_EXECUTING;
-    return;
-  }
-
   /* Start suck sequence: servo 180 deg -> pump on -> 1s -> OK. */
   __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, SERVO_CCR_180DEG);
   HAL_GPIO_WritePin(Relay_GPIO_Port, Relay_Pin, GPIO_PIN_SET);
@@ -160,7 +149,7 @@ void Action_Move(uint16_t x, uint16_t y)
 {
   (void)x;
   (void)y;
-  __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, SERVO_CCR_180DEG);
+  __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, SERVO_CCR_0DEG);
   current_status = STATUS_OK;
 }
 
@@ -218,18 +207,6 @@ void Action_Tick(void)
 
     case ACTION_SUCK_WAIT_5S:
       if ((HAL_GetTick() - action_tick_start) >= SUCK_WAIT_5S_MS) {
-        action_state = ACTION_NONE;
-        current_status = STATUS_OK;
-      }
-      break;
-
-    case ACTION_SUCK_SERVO_0:
-      action_tick_start = HAL_GetTick();
-      action_state = ACTION_SUCK_WAIT_3S;
-      break;
-
-    case ACTION_SUCK_WAIT_3S:
-      if ((HAL_GetTick() - action_tick_start) >= SUCK_WAIT_3S_MS) {
         action_state = ACTION_NONE;
         current_status = STATUS_OK;
       }
