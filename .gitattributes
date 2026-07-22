@@ -1,0 +1,6 @@
+* text=auto eol=lf
+
+# Firmware/build outputs are binary artifacts.
+*.elf binary
+*.bin binary
+*.hex binary

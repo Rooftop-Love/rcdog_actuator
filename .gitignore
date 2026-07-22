@@ -1,3 +1,26 @@
-build
-mx.scratch
-!.settings
+# Build output
+/build/
+/cmake-build-*/
+
+# CubeMX temporary files
+/mx.scratch/
+
+# IDE/editor local state
+/.settings/
+/.vscode/
+/.kilo/
+
+# Firmware/build artifacts
+*.o
+*.obj
+*.elf
+*.bin
+*.hex
+*.map
+*.lst
+*.d
+*.su
+
+# OS noise
+.DS_Store
+Thumbs.db
